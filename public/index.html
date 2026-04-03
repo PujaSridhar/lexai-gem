@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LexAI — Contract Intelligence</title>
+  <meta name="description" content="AI-powered contract analysis with multi-agent pipeline" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖</text></svg>" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #07090f; overflow-x: hidden; }
+    #root { min-height: 100vh; }
+  </style>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ═══════════════════════════════════════════
+   LEXAI v2 — Contract Intelligence Platform
+   Multi-Agent Pipeline with Live Telemetry
+   ═══════════════════════════════════════════ */
+
+const SAMPLE_CONTRACT = `NON-DISCLOSURE AGREEMENT
+
+This Non-Disclosure Agreement ("Agreement") is entered into as of January 15, 2025, by and between TechVenture Solutions Inc., a Delaware corporation ("Disclosing Party"), and the undersigned individual or entity ("Receiving Party").
+
+1. DEFINITION OF CONFIDENTIAL INFORMATION
+"Confidential Information" shall mean any and all information, whether written, oral, electronic, or visual, disclosed by the Disclosing Party, including but not limited to: trade secrets, proprietary algorithms, customer lists, financial projections, product roadmaps, marketing strategies, employee compensation data, and any information marked as "Confidential" or that a reasonable person would understand to be confidential. This definition shall be interpreted as broadly as possible in favor of the Disclosing Party.
+
+2. OBLIGATIONS OF RECEIVING PARTY
+The Receiving Party agrees to: (a) hold all Confidential Information in strict confidence; (b) not disclose Confidential Information to any third party without prior written consent; (c) use Confidential Information solely for the purpose of evaluating a potential business relationship; (d) take all reasonable measures to protect confidentiality, but in no event less than the measures the Receiving Party uses to protect its own confidential information.
+
+3. TERM AND DURATION
+This Agreement shall remain in effect in perpetuity. The confidentiality obligations herein shall survive any termination of discussions between the parties and shall have no expiration date whatsoever.
+
+4. NON-COMPETE CLAUSE
+During the term of this Agreement and for a period of three (3) years following any termination, the Receiving Party shall not, directly or indirectly, engage in, own, manage, operate, or participate in any business that competes with the Disclosing Party anywhere in the world.
+
+5. NON-SOLICITATION
+For a period of two (2) years following termination, the Receiving Party shall not solicit, hire, or attempt to hire any employee, contractor, or consultant of the Disclosing Party.
+
+6. REMEDIES AND PENALTIES
+Any breach of this Agreement shall result in: (a) liquidated damages of $750,000, regardless of actual damages suffered; (b) the Receiving Party shall be responsible for all legal fees and costs incurred by the Disclosing Party in enforcing this Agreement; (c) injunctive relief without the necessity of proving actual damages or posting bond.
+
+7. UNILATERAL AMENDMENT
+The Disclosing Party reserves the right to modify, amend, or supplement this Agreement at any time, with changes becoming effective upon written notice to the Receiving Party. Continued possession of Confidential Information after such notice constitutes acceptance of modified terms.
+
+8. GOVERNING LAW AND JURISDICTION
+This Agreement shall be governed by the laws of the State of Delaware. Any disputes shall be resolved exclusively in the courts of Wilmington, Delaware, and the Receiving Party hereby waives any objection to personal jurisdiction.
+
+9. ASSIGNMENT
+The Disclosing Party may assign this Agreement to any successor, affiliate, or acquirer without notice. The Receiving Party may not assign any rights or obligations without prior written consent.
+
+10. ENTIRE AGREEMENT
+This Agreement constitutes the entire understanding between the parties. No representations or warranties, express or implied, have been made other than those expressly set forth herein.
+
+IN WITNESS WHEREOF, the parties have executed this Agreement as of the date first written above.
+
+TechVenture Solutions Inc.
+By: ___________________________
+Name: Sarah Chen, VP Legal
+
+Receiving Party:
+By: ___________________________
+Name: ___________________________
+Date: ___________________________`;
+
+const STAGES = [
+  { id: "classify", label: "Classify", icon: "§", desc: "Document triage & type detection", agent: "Triage Agent" },
+  { id: "summarize", label: "Summarize", icon: "¶", desc: "Executive summary generation", agent: "Summary Agent" },
+  { id: "clauses", label: "Clause Analysis", icon: "⚖", desc: "Per-clause risk scoring", agent: "Clause Analyst", parallel: true },
+  { id: "redflags", label: "Red Flags", icon: "⚑", desc: "Risk & gap detection", agent: "Risk Scanner", parallel: true },
+  { id: "negotiate", label: "Negotiate", icon: "⇌", desc: "Strategy synthesis", agent: "Strategy Agent" },
+];
+
+const ROLES = ["Employee", "Tenant", "Buyer", "Seller", "Contractor", "Freelancer", "Investor", "Licensee"];
+const JURISDICTIONS = ["United States", "United Kingdom", "European Union", "Canada", "Australia", "India", "Singapore", "Other"];
+
+const SEV = {
+  critical: { bg: "rgba(220,38,38,0.15)", border: "#dc2626", text: "#fca5a5" },
+  warning: { bg: "rgba(234,179,8,0.12)", border: "#ca8a04", text: "#fde68a" },
+  info: { bg: "rgba(59,130,246,0.12)", border: "#3b82f6", text: "#93c5fd" },
+};
+const RISK_C = { high: "#ef4444", medium: "#f59e0b", low: "#22c55e" };
+
+// ── API ──
+// Detects if hosted on Vercel (serverless backend available) or standalone (needs API key)
+const IS_HOSTED = typeof window !== "undefined" && (window.location.hostname.includes("vercel.app") || window.location.hostname.includes("lexai"));
+
+async function callGemini(systemPrompt, userPrompt, apiKey) {
+  let res;
+  if (IS_HOSTED || !apiKey) {
+    // Use Vercel serverless proxy — no API key needed client-side
+    res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ systemPrompt, userPrompt }),
+    });
+  } else {
+    // Direct Gemini call — for local dev or when user provides own key
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: { maxOutputTokens: 4000, temperature: 0.3 },
+      }),
+    });
+  }
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`API ${res.status}: ${err.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  // Vercel proxy returns flat { text, inputTokens, outputTokens, totalTokens }
+  // Direct Gemini returns nested response
+  if (data.text !== undefined) return data;
+  const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+  const inp = data.usageMetadata?.promptTokenCount || 0;
+  const out = data.usageMetadata?.candidatesTokenCount || 0;
+  return { text, inputTokens: inp, outputTokens: out, totalTokens: inp + out };
+}
+
+async function callGeminiJSON(systemPrompt, userPrompt, apiKey) {
+  const r = await callGemini(
+    systemPrompt + "\n\nCRITICAL: Respond with ONLY valid JSON. No markdown fences, no preamble, no text outside the JSON.",
+    userPrompt, apiKey
+  );
+  const cleaned = r.text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+  return { data: JSON.parse(cleaned), tokens: r.totalTokens, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+}
+
+// ── Score Gauge ──
+function ScoreGauge({ score, label, size = 90, delay = 0 }) {
+  const [on, setOn] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setOn(true), delay); return () => clearTimeout(t); }, [delay]);
+  const r = (size - 12) / 2, circ = 2 * Math.PI * r;
+  const offset = on ? circ - (score / 100) * circ : circ;
+  const color = score >= 70 ? "#22c55e" : score >= 40 ? "#f59e0b" : "#ef4444";
+  return (
+    <div style={{ textAlign: "center" }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4.5" />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="4.5"
+          strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 1.4s cubic-bezier(0.34,1.56,0.64,1)" }} />
+        <text x={size/2} y={size/2} textAnchor="middle" dominantBaseline="central"
+          fill={color} fontSize={size > 100 ? "26" : "20"} fontWeight="700"
+          fontFamily="'Cormorant Garamond',serif"
+          style={{ transform: "rotate(90deg)", transformOrigin: "center" }}>
+          {on ? score : 0}
+        </text>
+      </svg>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 4, letterSpacing: 1.5, textTransform: "uppercase" }}>{label}</div>
+    </div>
+  );
+}
+
+// ── Typewriter ──
+function TypeWriter({ text, speed = 12, onDone }) {
+  const [disp, setDisp] = useState("");
+  const idx = useRef(0);
+  useEffect(() => {
+    if (!text) return;
+    idx.current = 0; setDisp("");
+    const iv = setInterval(() => {
+      idx.current += 1;
+      setDisp(text.slice(0, idx.current));
+      if (idx.current >= text.length) { clearInterval(iv); onDone?.(); }
+    }, speed);
+    return () => clearInterval(iv);
+  }, [text]);
+  return <>{disp}<span style={{ opacity: disp.length < (text?.length||0) ? 1 : 0, animation: "blink 0.8s step-end infinite" }}>▌</span></>;
+}
+
+// ── Architecture Diagram ──
+function ArchDiagram() {
+  const bx = { border: "1px solid", borderRadius: 10, padding: "12px 16px", minWidth: 85, textAlign: "center" };
+  const lb = { fontSize: 13, fontWeight: 600, color: "#e8e6e1", marginBottom: 2 };
+  const sb = { fontSize: 10, color: "rgba(255,255,255,0.3)" };
+  const ar = <div style={{ color: "rgba(201,165,92,0.3)", fontSize: 18, margin: "0 6px", flexShrink: 0 }}>→</div>;
+  return (
+    <div style={{ padding: "28px 20px", background: "rgba(255,255,255,0.015)", borderRadius: 16, border: "1px solid rgba(201,165,92,0.08)", marginBottom: 28 }}>
+      <div style={{ textAlign: "center", marginBottom: 20 }}>
+        <span style={{ fontSize: 10, letterSpacing: 3, textTransform: "uppercase", color: "rgba(201,165,92,0.5)" }}>How LexAI Works</span>
+        <h3 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 21, color: "#e8e6e1", margin: "6px 0 0", fontWeight: 500 }}>Multi-Agent Pipeline Architecture</h3>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0, flexWrap: "wrap", padding: "6px 0" }}>
+        <div style={{ ...bx, background: "rgba(99,102,241,0.08)", borderColor: "rgba(99,102,241,0.25)" }}>
+          <div style={lb}>📄 Input</div><div style={sb}>PDF / Text</div>
+        </div>
+        {ar}
+        <div style={{ ...bx, background: "rgba(201,165,92,0.06)", borderColor: "rgba(201,165,92,0.2)" }}>
+          <div style={lb}>§ Triage</div><div style={sb}>Classify type</div>
+        </div>
+        {ar}
+        <div style={{ ...bx, background: "rgba(201,165,92,0.06)", borderColor: "rgba(201,165,92,0.2)" }}>
+          <div style={lb}>¶ Summary</div><div style={sb}>Risk overview</div>
+        </div>
+        {ar}
+        <div style={{ border: "1px dashed rgba(201,165,92,0.2)", borderRadius: 12, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 9, color: "rgba(201,165,92,0.5)", textAlign: "center", letterSpacing: 2, textTransform: "uppercase" }}>Parallel</div>
+          <div style={{ ...bx, margin: 0, background: "rgba(234,179,8,0.04)", borderColor: "rgba(234,179,8,0.18)" }}>
+            <div style={lb}>⚖ Clauses</div>
+          </div>
+          <div style={{ ...bx, margin: 0, background: "rgba(239,68,68,0.04)", borderColor: "rgba(239,68,68,0.18)" }}>
+            <div style={lb}>⚑ Red Flags</div>
+          </div>
+        </div>
+        {ar}
+        <div style={{ ...bx, background: "rgba(34,197,94,0.04)", borderColor: "rgba(34,197,94,0.18)" }}>
+          <div style={lb}>⇌ Negotiate</div><div style={sb}>Synthesis</div>
+        </div>
+        {ar}
+        <div style={{ ...bx, background: "rgba(99,102,241,0.08)", borderColor: "rgba(99,102,241,0.25)" }}>
+          <div style={lb}>📊 Report</div><div style={sb}>Export</div>
+        </div>
+      </div>
+      <div style={{ textAlign: "center", marginTop: 16 }}>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)", fontFamily: "'DM Mono',monospace" }}>5 agents • 4 API calls (2 parallel) • ~15–25s total</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Live Pipeline Dashboard ──
+function LiveDash({ metrics, current, done, startTime, tokens }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!startTime) return;
+    const iv = setInterval(() => setElapsed(((Date.now() - startTime) / 1000).toFixed(1)), 100);
+    return () => clearInterval(iv);
+  }, [startTime]);
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, border: "1px solid rgba(201,165,92,0.12)", overflow: "hidden", marginBottom: 24 }}>
+      <div style={{ padding: "14px 22px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: current ? "#22c55e" : done.length === 5 ? "#c9a55c" : "rgba(255,255,255,0.15)", animation: current ? "pulse 1.5s ease infinite" : "none" }} />
+          <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: current ? "#22c55e" : done.length === 5 ? "#c9a55c" : "rgba(255,255,255,0.3)" }}>
+            {current ? "Pipeline Active" : done.length === 5 ? "Complete" : "Ready"}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 18 }}>
+          {startTime && <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,0.25)", letterSpacing: 1.5, textTransform: "uppercase" }}>Time</div>
+            <div style={{ fontSize: 15, fontFamily: "'DM Mono',monospace", color: "#c9a55c" }}>{elapsed}s</div>
+          </div>}
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,0.25)", letterSpacing: 1.5, textTransform: "uppercase" }}>Tokens</div>
+            <div style={{ fontSize: 15, fontFamily: "'DM Mono',monospace", color: "#c9a55c" }}>{tokens.toLocaleString()}</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ padding: "2px 0" }}>
+        {STAGES.map((s, i) => {
+          const isDone = done.includes(s.id);
+          const active = current === s.id;
+          const m = metrics[s.id];
+          return (
+            <div key={s.id} style={{
+              display: "grid", gridTemplateColumns: "40px 1fr 90px 80px 64px",
+              alignItems: "center", padding: "11px 22px", gap: 10,
+              background: active ? "rgba(201,165,92,0.04)" : "transparent",
+              borderBottom: i < 4 ? "1px solid rgba(255,255,255,0.02)" : "none",
+            }}>
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                {isDone ? (
+                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "rgba(34,197,94,0.12)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#22c55e" }}>✓</div>
+                ) : active ? (
+                  <div style={{ width: 22, height: 22, borderRadius: "50%", border: "2px solid #c9a55c", borderTopColor: "transparent", animation: "spin 0.8s linear infinite" }} />
+                ) : (
+                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "rgba(255,255,255,0.15)" }}>{i+1}</div>
+                )}
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: isDone ? "#e8e6e1" : active ? "#fff" : "rgba(255,255,255,0.3)" }}>
+                  {s.agent}
+                  {s.parallel && <span style={{ fontSize: 8, color: "#f59e0b", marginLeft: 8, letterSpacing: 1.5, textTransform: "uppercase", fontWeight: 700, opacity: 0.6 }}>PARALLEL</span>}
+                </div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 1 }}>{s.desc}</div>
+              </div>
+              <div style={{ fontSize: 12, fontFamily: "'DM Mono',monospace", color: m?.tokens ? "#e8e6e1" : "rgba(255,255,255,0.08)", textAlign: "right" }}>
+                {m?.tokens ? `${m.tokens.toLocaleString()} tk` : "—"}
+              </div>
+              <div style={{ fontSize: 9, fontFamily: "'DM Mono',monospace", color: "rgba(255,255,255,0.2)", textAlign: "right" }}>
+                {m?.inputTokens ? `↑${m.inputTokens} ↓${m.outputTokens}` : ""}
+              </div>
+              <div style={{ fontSize: 12, fontFamily: "'DM Mono',monospace", color: m?.time ? "#22c55e" : "rgba(255,255,255,0.08)", textAlign: "right" }}>
+                {m?.time ? `${m.time}s` : "—"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── MoJo Card ──
+function MoJoCard({ totalTime, inputLen, tokens }) {
+  const mojo = totalTime ? (inputLen / parseFloat(totalTime)).toFixed(0) : 0;
+  return (
+    <div style={{ background: "linear-gradient(135deg,rgba(201,165,92,0.08),rgba(201,165,92,0.02))", border: "1px solid rgba(201,165,92,0.2)", borderRadius: 14, padding: "22px 26px", marginBottom: 24 }}>
+      <div style={{ fontSize: 10, letterSpacing: 3, textTransform: "uppercase", color: "rgba(201,165,92,0.5)", marginBottom: 14 }}>MoJo Performance</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
+        {[
+          [mojo, "chars/sec", "#c9a55c"],
+          [`${totalTime}s`, "Total time", "#e8e6e1"],
+          [tokens.toLocaleString(), "Tokens", "#e8e6e1"],
+          ["5", "Agents", "#e8e6e1"],
+        ].map(([v, l, c], i) => (
+          <div key={i}>
+            <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "'Cormorant Garamond',serif", color: c }}>{v}</div>
+            <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", letterSpacing: 1.5, textTransform: "uppercase", marginTop: 2 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 16, padding: "10px 14px", background: "rgba(0,0,0,0.25)", borderRadius: 8 }}>
+        <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: "rgba(201,165,92,0.65)" }}>
+          MoJo = Output ÷ Human Time → {inputLen.toLocaleString()} chars in {totalTime}s = <span style={{ color: "#c9a55c", fontWeight: 700 }}>{mojo} MoJo</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════ APP ═══════════════
+function LexAI() {
+  const [view, setView] = useState("upload");
+  const [contractText, setContractText] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [role, setRole] = useState("Employee");
+  const [jurisdiction, setJurisdiction] = useState("United States");
+  const [inputMode, setInputMode] = useState("paste");
+  const [apiKey, setApiKey] = useState("");
+
+  const [current, setCurrent] = useState(null);
+  const [done, setDone] = useState([]);
+  const [startTime, setStartTime] = useState(null);
+  const [totalTime, setTotalTime] = useState(null);
+  const [error, setError] = useState(null);
+  const [metrics, setMetrics] = useState({});
+  const [totalTokens, setTotalTokens] = useState(0);
+
+  const [classification, setClassification] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [clauses, setClauses] = useState(null);
+  const [redFlags, setRedFlags] = useState(null);
+  const [negotiation, setNegotiation] = useState(null);
+  const [activeTab, setActiveTab] = useState("overview");
+  const [summaryTyped, setSummaryTyped] = useState(false);
+
+  const fileRef = useRef(null);
+
+  const handleFile = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    setFileName(f.name);
+    if (f.name.match(/\.(txt|md)$/i)) { setContractText(await f.text()); }
+    else if (f.name.endsWith(".pdf")) {
+      const buf = await f.arrayBuffer();
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(buf));
+      const m = text.match(/[\x20-\x7E\n\r\t]{40,}/g);
+      setContractText(m && m.join("").length > 100 ? m.join("\n").replace(/[^\x20-\x7E\n\r\t]/g," ").replace(/\s{3,}/g,"\n") : "[PDF extraction limited — paste text for best results]");
+    } else { setContractText(await f.text()); }
+  };
+
+  const addMetric = (id, d) => {
+    setMetrics(p => ({ ...p, [id]: d }));
+    setTotalTokens(p => p + (d.tokens || 0));
+  };
+
+  const run = useCallback(async () => {
+    if (!contractText.trim() || contractText.length < 50) { setError("Provide at least 50 characters."); return; }
+    if (!apiKey.trim() && !IS_HOSTED) { setError("Enter your Google AI API key above."); return; }
+    setError(null); setView("analyzing"); setSummaryTyped(false);
+    const t0 = Date.now();
+    setStartTime(t0); setDone([]); setMetrics({}); setTotalTokens(0);
+    const txt = contractText.slice(0, 12000);
+
+    try {
+      // Stage 1
+      setCurrent("classify");
+      const s1 = Date.now();
+      const c1 = await callGeminiJSON(
+        `You are a legal document classifier. Return JSON: {"type": string, "parties": [string], "effective_date": string|null, "governing_law": string|null, "confidence": number 0-100}`,
+        `Classify:\n\n${txt}`, apiKey
+      );
+      addMetric("classify", { tokens: c1.tokens, inputTokens: c1.inputTokens, outputTokens: c1.outputTokens, time: ((Date.now()-s1)/1000).toFixed(1) });
+      setClassification(c1.data); setDone(["classify"]);
+
+      // Stage 2
+      setCurrent("summarize");
+      const s2 = Date.now();
+      const c2 = await callGeminiJSON(
+        `Expert legal analyst. Role: ${role}. Jurisdiction: ${jurisdiction}. Return JSON: {"executive_summary": string (4-5 sentences), "key_terms": [{"term": string, "value": string}] (max 8), "overall_risk_score": number 0-100, "sub_scores": {"fairness": number, "clarity": number, "completeness": number, "enforceability": number}, "risk_level": "low"|"medium"|"high", "one_line_verdict": string}`,
+        `Summarize this ${c1.data.type} for a ${role}:\n\n${txt}`, apiKey
+      );
+      addMetric("summarize", { tokens: c2.tokens, inputTokens: c2.inputTokens, outputTokens: c2.outputTokens, time: ((Date.now()-s2)/1000).toFixed(1) });
+      setSummary(c2.data); setDone(["classify","summarize"]);
+
+      // Stage 3+4 parallel
+      setCurrent("clauses");
+      const s3 = Date.now();
+      const [c3, c4] = await Promise.all([
+        callGeminiJSON(
+          `Contract clause analyst. Role: ${role}, ${jurisdiction}. Return JSON: {"clauses": [{"title": string, "original_text": string (max 80 chars excerpt), "risk_score": number 0-100, "risk_level": "low"|"medium"|"high", "plain_english": string, "concerns": [string], "suggestion": string}]} 5-10 key clauses.`,
+          `Analyze clauses:\n\n${txt}`, apiKey
+        ),
+        callGeminiJSON(
+          `Legal risk detector. Role: ${role}, ${jurisdiction}. Return JSON: {"red_flags": [{"title": string, "description": string, "severity": "critical"|"warning"|"info", "clause_reference": string}], "missing_clauses": [{"title": string, "importance": "essential"|"recommended"|"nice-to-have", "description": string}]}`,
+          `Red flags & missing clauses:\n\n${txt}`, apiKey
+        ),
+      ]);
+      const pt = ((Date.now()-s3)/1000).toFixed(1);
+      addMetric("clauses", { tokens: c3.tokens, inputTokens: c3.inputTokens, outputTokens: c3.outputTokens, time: pt });
+      addMetric("redflags", { tokens: c4.tokens, inputTokens: c4.inputTokens, outputTokens: c4.outputTokens, time: pt });
+      setClauses(c3.data); setRedFlags(c4.data); setDone(["classify","summarize","clauses","redflags"]);
+
+      // Stage 5
+      setCurrent("negotiate");
+      const s5 = Date.now();
+      const c5 = await callGeminiJSON(
+        `Negotiation strategist for a ${role} in ${jurisdiction}. Return JSON: {"strategies": [{"priority": "must-have"|"should-have"|"nice-to-have", "title": string, "current_language": string, "suggested_language": string, "rationale": string}], "overall_negotiation_position": string, "walk_away_triggers": [string]}`,
+        `Strategies for ${c1.data.type}. High-risk: ${c3.data.clauses?.filter(c=>c.risk_level==="high").map(c=>c.title).join(", ")||"none"}. Flags: ${c4.data.red_flags?.map(r=>r.title).join(", ")||"none"}.\n\n${txt}`, apiKey
+      );
+      addMetric("negotiate", { tokens: c5.tokens, inputTokens: c5.inputTokens, outputTokens: c5.outputTokens, time: ((Date.now()-s5)/1000).toFixed(1) });
+      setNegotiation(c5.data); setDone(["classify","summarize","clauses","redflags","negotiate"]);
+      setCurrent(null);
+      setTotalTime(((Date.now() - t0) / 1000).toFixed(1));
+      setView("results");
+    } catch (err) {
+      setError(`Pipeline error: ${err.message}`);
+      setView("upload");
+    }
+  }, [contractText, role, jurisdiction, apiKey]);
+
+  // Export
+  const exportReport = () => {
+    const sc = summary?.overall_risk_score||0;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>LexAI — ${classification?.type||"Contract"}</title><style>body{font-family:Georgia,serif;max-width:800px;margin:40px auto;padding:20px;color:#1a1a2e;line-height:1.7}h1{border-bottom:3px solid #c9a55c;padding-bottom:12px}h2{margin-top:32px;border-left:4px solid #c9a55c;padding-left:12px}.sc{font-size:48px;font-weight:700;color:${sc>=70?"#16a34a":sc>=40?"#ca8a04":"#dc2626"}}.cl{border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:12px 0}.rf{background:#fef2f2;border-left:4px solid #dc2626;padding:12px;margin:8px 0;border-radius:4px}.m{color:#6b7280;font-size:14px}.mj{background:#f8f5f0;padding:16px;border-radius:8px;margin:20px 0;text-align:center;font-family:monospace}</style></head><body><h1>LexAI Report</h1><p class="m">${new Date().toLocaleDateString()} • ${totalTime}s • ${totalTokens.toLocaleString()} tokens • ${role} • ${jurisdiction}</p><div class="mj">MoJo: ${totalTime?(contractText.length/parseFloat(totalTime)).toFixed(0):"-"} chars/sec</div><h2>${classification?.type}</h2><p>Parties: ${classification?.parties?.join(" ↔ ")||"N/A"}</p><h2>Risk</h2><p class="sc">${sc}/100</p><p><em>${summary?.one_line_verdict||""}</em></p><h2>Summary</h2><p>${summary?.executive_summary||""}</p><h2>Terms</h2>${summary?.key_terms?.map(t=>`<p><b>${t.term}:</b> ${t.value}</p>`).join("")||""}<h2>Clauses</h2>${clauses?.clauses?.map(c=>`<div class="cl"><b>${c.title}</b> — ${c.risk_score}/100<p>${c.plain_english}</p><p><em>${c.suggestion}</em></p></div>`).join("")||""}<h2>Red Flags</h2>${redFlags?.red_flags?.map(r=>`<div class="rf"><b>[${r.severity}] ${r.title}</b><p>${r.description}</p></div>`).join("")||"None"}<h2>Missing</h2>${redFlags?.missing_clauses?.map(m=>`<p>• <b>${m.title}</b> (${m.importance}): ${m.description}</p>`).join("")||"None"}<h2>Negotiation</h2><p><em>${negotiation?.overall_negotiation_position||""}</em></p>${negotiation?.strategies?.map(s=>`<div class="cl"><b>[${s.priority}] ${s.title}</b><p>Current: ${s.current_language}</p><p><b>Suggested:</b> ${s.suggested_language}</p></div>`).join("")||""}<h2>Walk-Away</h2>${negotiation?.walk_away_triggers?.map(w=>`<p>🚫 ${w}</p>`).join("")||""}<hr><p class="m">LexAI • AI Pipeline</p></body></html>`;
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([html],{type:"text/html"}));
+    a.download = `LexAI-${new Date().toISOString().slice(0,10)}.html`; a.click();
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#07090f", color: "#e8e6e1", fontFamily: "'DM Sans',sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes blink{50%{opacity:0}}
+        @keyframes slideIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+        .fu{animation:fadeUp 0.5s ease forwards}
+        .cd{background:rgba(255,255,255,0.025);border:1px solid rgba(201,165,92,0.1);border-radius:12px;padding:22px;margin-bottom:14px;transition:all 0.3s}
+        .cd:hover{border-color:rgba(201,165,92,0.25)}
+        .bg{background:linear-gradient(135deg,#c9a55c,#a08040);color:#07090f;border:none;padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;cursor:pointer;font-family:'DM Sans';transition:all 0.3s;letter-spacing:0.5px}
+        .bg:hover{transform:translateY(-2px);box-shadow:0 8px 28px rgba(201,165,92,0.3)}
+        .bg:disabled{opacity:0.4;cursor:not-allowed;transform:none;box-shadow:none}
+        .bo{background:transparent;color:#c9a55c;border:1px solid rgba(201,165,92,0.3);padding:10px 18px;border-radius:8px;font-size:13px;cursor:pointer;font-family:'DM Sans';transition:all 0.3s}
+        .bo:hover{background:rgba(201,165,92,0.08);border-color:#c9a55c}
+        .gh{background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.6);border:1px solid rgba(255,255,255,0.08);padding:10px 16px;border-radius:8px;font-size:13px;cursor:pointer;font-family:'DM Sans';transition:all 0.3s}
+        .gh:hover{background:rgba(255,255,255,0.08);color:#e8e6e1}
+        .tb{padding:10px 18px;border:none;background:transparent;color:rgba(255,255,255,0.4);cursor:pointer;font-family:'DM Sans';font-size:12px;border-bottom:2px solid transparent;transition:all 0.3s;letter-spacing:0.5px;text-transform:uppercase}
+        .tb.a{color:#c9a55c;border-bottom-color:#c9a55c}
+        .tb:hover{color:rgba(255,255,255,0.7)}
+        textarea,select,input{font-family:'DM Sans',sans-serif}
+        .si{animation:slideIn 0.4s ease forwards;opacity:0}
+      `}</style>
+
+      {/* Header */}
+      <header style={{ padding: "16px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(201,165,92,0.06)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg,#c9a55c,#8a6d30)", fontSize: 16, color: "#07090f", fontFamily: "'Cormorant Garamond',serif", fontWeight: 700 }}>⚖</div>
+          <span style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 700, color: "#c9a55c", letterSpacing: 1 }}>LexAI</span>
+          <span style={{ fontSize: 9, color: "rgba(255,255,255,0.2)", letterSpacing: 2.5, textTransform: "uppercase", marginLeft: 4 }}>Contract Intelligence</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {IS_HOSTED && <span style={{ fontSize: 10, color: "rgba(34,197,94,0.5)", fontFamily: "'DM Mono',monospace" }}>● Hosted</span>}
+          {!IS_HOSTED && apiKey && <span style={{ fontSize: 10, color: "rgba(34,197,94,0.5)", fontFamily: "'DM Mono',monospace" }}>● API Key Set</span>}
+          {view === "results" && <>
+            <button className="bo" onClick={exportReport}>↓ Export</button>
+            <button className="gh" onClick={() => { setView("upload"); setDone([]); setContractText(""); setFileName(""); setMetrics({}); setTotalTokens(0); }}>+ New</button>
+          </>}
+        </div>
+      </header>
+
+      <main style={{ maxWidth: 980, margin: "0 auto", padding: "24px 20px" }}>
+
+        {/* ══════ UPLOAD ══════ */}
+        {view === "upload" && (
+          <div className="fu">
+            <div style={{ textAlign: "center", marginBottom: 36 }}>
+              <h1 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 38, fontWeight: 600, color: "#e8e6e1", margin: 0, lineHeight: 1.15 }}>
+                Analyze Any Contract<br /><span style={{ color: "#c9a55c" }}>in Seconds</span>
+              </h1>
+              <p style={{ color: "rgba(255,255,255,0.3)", fontSize: 14, marginTop: 10 }}>5 specialist agents • live telemetry • exportable report</p>
+            </div>
+
+            <ArchDiagram />
+
+            <div style={{ display: "flex", gap: 0, marginBottom: 18, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <button className={`tb ${inputMode==="paste"?"a":""}`} onClick={()=>setInputMode("paste")}>Paste Text</button>
+              <button className={`tb ${inputMode==="file"?"a":""}`} onClick={()=>setInputMode("file")}>Upload File</button>
+            </div>
+
+            {inputMode === "paste" ? (
+              <div>
+                <textarea value={contractText} onChange={e=>setContractText(e.target.value)} placeholder="Paste your contract text here..."
+                  style={{ width: "100%", minHeight: 190, background: "rgba(255,255,255,0.025)", border: "1px solid rgba(201,165,92,0.1)", borderRadius: 12, padding: 18, color: "#e8e6e1", fontSize: 14, lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+                  <button className="gh" onClick={() => { setContractText(SAMPLE_CONTRACT); setFileName("sample-nda.txt"); }} style={{ fontSize: 12, padding: "7px 14px" }}>
+                    📄 Load Sample NDA
+                  </button>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 11, fontFamily: "'DM Mono',monospace" }}>{contractText.length.toLocaleString()} chars</span>
+                </div>
+              </div>
+            ) : (
+              <div onClick={()=>fileRef.current?.click()}
+                style={{ border: "2px dashed rgba(201,165,92,0.15)", borderRadius: 12, padding: "40px 20px", textAlign: "center", cursor: "pointer", background: "rgba(255,255,255,0.01)" }}>
+                <div style={{ fontSize: 30, marginBottom: 8, opacity: 0.4 }}>📄</div>
+                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 13 }}>
+                  {fileName ? <><span style={{color:"#c9a55c"}}>{fileName}</span> loaded</> : "Upload .txt, .pdf, or .md"}
+                </div>
+                <input ref={fileRef} type="file" accept=".txt,.pdf,.md" style={{display:"none"}} onChange={handleFile}/>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 18 }}>
+              {[["Your Role", role, setRole, ROLES], ["Jurisdiction", jurisdiction, setJurisdiction, JURISDICTIONS]].map(([l,v,set,opts]) => (
+                <div key={l}>
+                  <label style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", letterSpacing: 1.5, textTransform: "uppercase", display: "block", marginBottom: 6 }}>{l}</label>
+                  <select value={v} onChange={e=>set(e.target.value)} style={{ width: "100%", padding: "10px 14px", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(201,165,92,0.1)", borderRadius: 8, color: "#e8e6e1", fontSize: 14, outline: "none", appearance: "none", cursor: "pointer" }}>
+                    {opts.map(o=><option key={o} value={o} style={{background:"#12141c"}}>{o}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            {!IS_HOSTED && (
+            <div style={{ marginTop: 16 }}>
+              <label style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", letterSpacing: 1.5, textTransform: "uppercase", display: "block", marginBottom: 6 }}>Google AI API Key</label>
+              <input type="password" placeholder="AIzaSy..." value={apiKey} onChange={e=>setApiKey(e.target.value)}
+                style={{ width: "100%", padding: "10px 14px", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(201,165,92,0.1)", borderRadius: 8, color: "#e8e6e1", fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "'DM Mono',monospace" }} />
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.15)", marginTop: 3 }}>From aistudio.google.com → Get API Key • stored in memory only</div>
+            </div>
+            )}
+
+            {error && <div style={{ marginTop: 14, padding: "10px 14px", background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.2)", borderRadius: 8, color: "#fca5a5", fontSize: 13 }}>{error}</div>}
+
+            <div style={{ textAlign: "center", marginTop: 24 }}>
+              <button className="bg" onClick={run} disabled={!contractText.trim()||contractText.length<50||(!IS_HOSTED && !apiKey.trim())}>⚖ Analyze Contract</button>
+            </div>
+          </div>
+        )}
+
+        {/* ══════ ANALYZING ══════ */}
+        {view === "analyzing" && (
+          <div className="fu">
+            <div style={{ textAlign: "center", marginBottom: 24 }}>
+              <h2 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 24, color: "#c9a55c", fontWeight: 500, margin: 0 }}>Pipeline Running</h2>
+              <p style={{ color: "rgba(255,255,255,0.3)", fontSize: 13, marginTop: 6 }}>Multi-agent analysis in progress...</p>
+            </div>
+            <LiveDash metrics={metrics} current={current} done={done} startTime={startTime} tokens={totalTokens} />
+          </div>
+        )}
+
+        {/* ══════ RESULTS ══════ */}
+        {view === "results" && summary && (
+          <div className="fu">
+            <MoJoCard totalTime={totalTime} inputLen={contractText.length} tokens={totalTokens} />
+            <LiveDash metrics={metrics} current={null} done={done} startTime={null} tokens={totalTokens} />
+
+            <div className="cd" style={{ background: "linear-gradient(135deg,rgba(201,165,92,0.05),rgba(201,165,92,0.01))", borderColor: "rgba(201,165,92,0.12)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>Identified As</div>
+                  <h2 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 26, fontWeight: 600, margin: 0, color: "#c9a55c" }}>{classification?.type}</h2>
+                  <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, marginTop: 4 }}>{classification?.parties?.join(" ↔ ")} • {classification?.confidence}% confidence</div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[["Role", role], ["Law", classification?.governing_law||jurisdiction]].map(([l,v]) => (
+                    <div key={l} style={{ textAlign: "center", padding: "7px 14px", background: "rgba(255,255,255,0.025)", borderRadius: 8 }}>
+                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", letterSpacing: 1, textTransform: "uppercase" }}>{l}</div>
+                      <div style={{ fontSize: 13, color: "#e8e6e1", fontWeight: 500, marginTop: 2 }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "center", gap: 28, marginBottom: 24, flexWrap: "wrap", padding: "6px 0" }}>
+              <ScoreGauge score={summary.overall_risk_score} label="Overall" size={110} delay={0} />
+              <ScoreGauge score={summary.sub_scores?.fairness||0} label="Fairness" delay={120} />
+              <ScoreGauge score={summary.sub_scores?.clarity||0} label="Clarity" delay={240} />
+              <ScoreGauge score={summary.sub_scores?.completeness||0} label="Complete" delay={360} />
+              <ScoreGauge score={summary.sub_scores?.enforceability||0} label="Enforce" delay={480} />
+            </div>
+
+            <div style={{ textAlign: "center", marginBottom: 22, padding: "11px 18px", background: "rgba(201,165,92,0.04)", borderRadius: 10, border: "1px solid rgba(201,165,92,0.08)" }}>
+              <span style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 16, fontStyle: "italic", color: "rgba(255,255,255,0.6)" }}>"{summary.one_line_verdict}"</span>
+            </div>
+
+            <div style={{ display: "flex", gap: 0, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 20 }}>
+              {[["overview","Overview"],["clauses",`Clauses (${clauses?.clauses?.length||0})`],["redflags",`Flags (${redFlags?.red_flags?.length||0})`],["missing",`Missing (${redFlags?.missing_clauses?.length||0})`],["negotiate","Negotiate"]].map(([id,l])=>(
+                <button key={id} className={`tb ${activeTab===id?"a":""}`} onClick={()=>setActiveTab(id)}>{l}</button>
+              ))}
+            </div>
+
+            {activeTab === "overview" && (
+              <div className="fu">
+                <div className="cd">
+                  <h3 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 18, color: "#c9a55c", marginTop: 0, fontWeight: 500 }}>Executive Summary</h3>
+                  <p style={{ color: "rgba(255,255,255,0.6)", lineHeight: 1.8, fontSize: 14 }}>
+                    {!summaryTyped ? <TypeWriter text={summary.executive_summary} speed={10} onDone={()=>setSummaryTyped(true)} /> : summary.executive_summary}
+                  </p>
+                </div>
+                <div className="cd">
+                  <h3 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 18, color: "#c9a55c", marginTop: 0, fontWeight: 500 }}>Key Terms</h3>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    {summary.key_terms?.map((t,i) => (
+                      <div key={i} className="si" style={{ animationDelay: `${i*70}ms`, display: "flex", justifyContent: "space-between", padding: "9px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.04)" }}>
+                        <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 13 }}>{t.term}</span>
+                        <span style={{ color: "#e8e6e1", fontSize: 13, fontWeight: 500, textAlign: "right", maxWidth: "55%" }}>{t.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "clauses" && (
+              <div className="fu">
+                {clauses?.clauses?.map((c,i) => (
+                  <div key={i} className="cd si" style={{ animationDelay: `${i*90}ms`, borderLeftWidth: 3, borderLeftColor: RISK_C[c.risk_level] }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <h4 style={{ margin: 0, fontFamily: "'Cormorant Garamond',serif", fontSize: 16, color: "#e8e6e1", fontWeight: 600 }}>{c.title}</h4>
+                      <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase", background: `${RISK_C[c.risk_level]}15`, color: RISK_C[c.risk_level] }}>{c.risk_score}/100</span>
+                    </div>
+                    <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "'DM Mono',monospace", fontStyle: "italic", margin: "0 0 6px" }}>"{c.original_text}"</p>
+                    <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, lineHeight: 1.7, margin: "0 0 8px" }}>{c.plain_english}</p>
+                    {c.concerns?.length > 0 && <div style={{ marginBottom: 8 }}>{c.concerns.map((x,j)=><span key={j} style={{ display: "inline-block", padding: "2px 8px", marginRight: 5, marginBottom: 3, background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)", borderRadius: 6, fontSize: 11, color: "#fca5a5" }}>⚠ {x}</span>)}</div>}
+                    <div style={{ padding: "9px 12px", background: "rgba(34,197,94,0.03)", borderRadius: 8, border: "1px solid rgba(34,197,94,0.07)" }}>
+                      <span style={{ fontSize: 9, color: "#86efac", letterSpacing: 1.5, textTransform: "uppercase", fontWeight: 600 }}>💡 Suggestion</span>
+                      <p style={{ color: "rgba(255,255,255,0.55)", fontSize: 13, margin: "4px 0 0", lineHeight: 1.6 }}>{c.suggestion}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {activeTab === "redflags" && (
+              <div className="fu">
+                {(!redFlags?.red_flags||redFlags.red_flags.length===0) && <div className="cd" style={{ textAlign: "center", color: "rgba(255,255,255,0.3)" }}>No red flags ✓</div>}
+                {redFlags?.red_flags?.map((r,i) => {
+                  const s = SEV[r.severity]||SEV.info;
+                  return (
+                    <div key={i} className="cd si" style={{ animationDelay: `${i*90}ms`, background: s.bg, borderColor: s.border, borderLeftWidth: 4 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", background: `${s.border}28`, color: s.text }}>{r.severity}</span>
+                        <h4 style={{ margin: 0, fontSize: 15, fontFamily: "'Cormorant Garamond',serif", color: s.text }}>{r.title}</h4>
+                      </div>
+                      <p style={{ color: "rgba(255,255,255,0.55)", fontSize: 13, lineHeight: 1.7, margin: 0 }}>{r.description}</p>
+                      {r.clause_reference && <div style={{ marginTop: 5, fontSize: 10, color: "rgba(255,255,255,0.2)", fontFamily: "'DM Mono',monospace" }}>Ref: {r.clause_reference}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {activeTab === "missing" && (
+              <div className="fu" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {(!redFlags?.missing_clauses||redFlags.missing_clauses.length===0) && <div className="cd" style={{ gridColumn: "span 2", textAlign: "center", color: "rgba(255,255,255,0.3)" }}>None ✓</div>}
+                {redFlags?.missing_clauses?.map((m,i) => {
+                  const c = m.importance==="essential"?"#ef4444":m.importance==="recommended"?"#f59e0b":"#3b82f6";
+                  return (
+                    <div key={i} className="cd si" style={{ animationDelay: `${i*70}ms` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: c }} />
+                        <span style={{ fontSize: 9, color: c, letterSpacing: 1.5, textTransform: "uppercase", fontWeight: 600 }}>{m.importance}</span>
+                      </div>
+                      <h4 style={{ margin: "0 0 4px", fontFamily: "'Cormorant Garamond',serif", fontSize: 15, color: "#e8e6e1" }}>{m.title}</h4>
+                      <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, lineHeight: 1.6, margin: 0 }}>{m.description}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {activeTab === "negotiate" && negotiation && (
+              <div className="fu">
+                <div className="cd" style={{ background: "rgba(201,165,92,0.03)", borderColor: "rgba(201,165,92,0.1)" }}>
+                  <h3 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 18, color: "#c9a55c", marginTop: 0, fontWeight: 500 }}>Negotiation Position</h3>
+                  <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, lineHeight: 1.7 }}>{negotiation.overall_negotiation_position}</p>
+                </div>
+                {negotiation.strategies?.map((s,i) => {
+                  const pc = s.priority==="must-have"?"#ef4444":s.priority==="should-have"?"#f59e0b":"#22c55e";
+                  return (
+                    <div key={i} className="cd si" style={{ animationDelay: `${i*90}ms` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <span style={{ padding: "3px 9px", borderRadius: 4, fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", background: `${pc}15`, color: pc }}>{s.priority}</span>
+                        <h4 style={{ margin: 0, fontSize: 15, fontFamily: "'Cormorant Garamond',serif", color: "#e8e6e1" }}>{s.title}</h4>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                        <div style={{ padding: "9px 12px", background: "rgba(239,68,68,0.03)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.07)" }}>
+                          <div style={{ fontSize: 9, color: "#fca5a5", letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 3 }}>Current</div>
+                          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 13 }}>{s.current_language}</div>
+                        </div>
+                        <div style={{ padding: "9px 12px", background: "rgba(34,197,94,0.03)", borderRadius: 8, border: "1px solid rgba(34,197,94,0.07)" }}>
+                          <div style={{ fontSize: 9, color: "#86efac", letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 3 }}>Suggested</div>
+                          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 13 }}>{s.suggested_language}</div>
+                        </div>
+                      </div>
+                      <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, fontStyle: "italic", margin: 0 }}>{s.rationale}</p>
+                    </div>
+                  );
+                })}
+                {negotiation.walk_away_triggers?.length > 0 && (
+                  <div className="cd" style={{ background: "rgba(220,38,38,0.04)", borderColor: "rgba(220,38,38,0.1)" }}>
+                    <h3 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 16, color: "#fca5a5", marginTop: 0, fontWeight: 500 }}>🚫 Walk-Away Triggers</h3>
+                    {negotiation.walk_away_triggers.map((w,i) => (
+                      <div key={i} style={{ padding: "6px 0", borderBottom: i<negotiation.walk_away_triggers.length-1?"1px solid rgba(255,255,255,0.03)":"none", color: "rgba(255,255,255,0.55)", fontSize: 13 }}>{w}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ marginTop: 24, padding: "14px", background: "rgba(255,255,255,0.01)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.03)", textAlign: "center" }}>
+              <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 11, letterSpacing: 1, fontFamily: "'DM Mono',monospace" }}>
+                LexAI v2 • 5 agents • {totalTime}s • {totalTokens.toLocaleString()} tk • {role} • {jurisdiction}
+              </span>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<LexAI />);
+  </script>
+</body>
+</html>

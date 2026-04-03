@@ -1,0 +1,13 @@
+{
+  "name": "lexai",
+  "version": "2.0.0",
+  "description": "LexAI — AI-Powered Contract Intelligence Platform",
+  "private": true,
+  "scripts": {
+    "vercel:dev": "vercel dev"
+  }
+  ,
+  "devDependencies": {
+    "vercel": "^50.39.0"
+  }
+}
