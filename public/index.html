@@ -109,7 +109,7 @@ async function callGemini(systemPrompt, userPrompt, apiKey) {
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: userPrompt }] }],
         systemInstruction: { parts: [{ text: systemPrompt }] },
-        generationConfig: { maxOutputTokens: 4000, temperature: 0.3 },
+        generationConfig: { maxOutputTokens: 8192, temperature: 0.3 },
       }),
     });
   }
@@ -127,13 +127,41 @@ async function callGemini(systemPrompt, userPrompt, apiKey) {
   return { text, inputTokens: inp, outputTokens: out, totalTokens: inp + out };
 }
 
-async function callGeminiJSON(systemPrompt, userPrompt, apiKey) {
-  const r = await callGemini(
-    systemPrompt + "\n\nCRITICAL: Respond with ONLY valid JSON. No markdown fences, no preamble, no text outside the JSON.",
-    userPrompt, apiKey
-  );
-  const cleaned = r.text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-  return { data: JSON.parse(cleaned), tokens: r.totalTokens, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+async function callGeminiJSON(systemPrompt, userPrompt, apiKey, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const r = await callGemini(
+      systemPrompt + "\n\nCRITICAL: You MUST respond with ONLY valid JSON. No markdown fences, no preamble, no trailing text. Ensure all strings are properly closed. Keep string values concise (under 200 chars each) to avoid truncation.",
+      userPrompt, apiKey
+    );
+    let cleaned = r.text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    // Try direct parse first
+    try {
+      return { data: JSON.parse(cleaned), tokens: r.totalTokens, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+    } catch (e) {
+      // Attempt JSON repair for common Gemini truncation issues
+      try {
+        // Remove any trailing incomplete key-value pairs
+        cleaned = cleaned.replace(/,\s*"[^"]*"?\s*:?\s*"?[^"]*$/, "");
+        // Close unclosed strings
+        const openQuotes = (cleaned.match(/"/g) || []).length;
+        if (openQuotes % 2 !== 0) cleaned += '"';
+        // Close unclosed arrays and objects
+        const openBrackets = (cleaned.match(/\[/g) || []).length - (cleaned.match(/\]/g) || []).length;
+        const openBraces = (cleaned.match(/\{/g) || []).length - (cleaned.match(/\}/g) || []).length;
+        for (let i = 0; i < openBrackets; i++) cleaned += "]";
+        for (let i = 0; i < openBraces; i++) cleaned += "}";
+        // Remove trailing commas before closing brackets
+        cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
+        return { data: JSON.parse(cleaned), tokens: r.totalTokens, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+      } catch (e2) {
+        if (attempt < retries) {
+          await new Promise(ok => setTimeout(ok, 1000 * (attempt + 1)));
+          continue; // retry
+        }
+        throw new Error(`JSON parse failed after ${retries + 1} attempts: ${e.message}`);
+      }
+    }
+  }
 }
 
 // ── Score Gauge ──
